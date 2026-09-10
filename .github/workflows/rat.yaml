@@ -139,11 +139,11 @@ jobs:
           name: trivy-dependency-report
           path: application/trivy-report.json
 
-# Stage 3 : Docker Image Build + Image Scanning
+  # Stage 3 : Docker Image Build + Image Scanning
   build-and-scan-image:
     name: Build & Scan Docker Image
     runs-on: ubuntu-latest
-    needs: trivy-deps
+    needs: trivy
 
     steps:
       - name: Display Received Application Information
@@ -154,7 +154,7 @@ jobs:
           echo "Application Commit SHA: ${{ github.event.client_payload.commit_sha }}"
 
       - name: Checkout Exact Application Commit
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: ${{ github.event.client_payload.repository }}
           ref: ${{ github.event.client_payload.commit_sha }}
@@ -166,7 +166,10 @@ jobs:
           echo "Checked Out Commit SHA:"
           git -C application rev-parse HEAD
 
-      # Build the Docker image from the application's Dockerfile
+      - name: Create Trivy Cache
+        run: mkdir -p "${GITHUB_WORKSPACE}/trivy-cache"
+
+      # Build Docker Image
       - name: Step 1 - Build Docker Image
         run: |
           docker build \
@@ -174,7 +177,7 @@ jobs:
             -f application/backend/Dockerfile \
             application/backend
 
-      # Scan the freshly built image for OS + library vulnerabilities
+      # Scan Docker Image
       - name: Step 2 - Scan Docker Image for Vulnerabilities
         run: |
           docker run --rm \
@@ -187,6 +190,7 @@ jobs:
             --format table \
             --exit-code 1
 
+      # Generate JSON Report
       - name: Step 3 - Generate JSON Report of Image Findings
         if: always()
         run: |
@@ -202,24 +206,27 @@ jobs:
             --output /output/trivy-image-report.json \
             --exit-code 0
 
+      # Print Summary
       - name: Step 4 - Show Image Vulnerability Summary
         if: always()
         run: |
           echo "Trivy Image Scan Findings:"
           echo "====================================="
+
           if [ -f "trivy-image-report.json" ]; then
-            cat trivy-image-report.json | jq -r '
-              .Results[]? | select(.Vulnerabilities != null) |
-              .Vulnerabilities[] |
-              "Package: \(.PkgName)\nInstalled: \(.InstalledVersion)\nFixed In: \(.FixedVersion // "N/A")\nSeverity: \(.Severity)\nCVE: \(.VulnerabilityID)\n---"
-            '
+            jq -r '
+              .Results[]?
+              | select(.Vulnerabilities != null)
+              | .Vulnerabilities[]
+              | "Package: \(.PkgName)\nInstalled: \(.InstalledVersion)\nFixed In: \(.FixedVersion // "N/A")\nSeverity: \(.Severity)\nCVE: \(.VulnerabilityID)\n--------------------------------"
+            ' trivy-image-report.json
           else
-            echo "No report file found — either no vulnerabilities were detected or the scan did not run."
+            echo "No report file found."
           fi
 
-      - name: Upload Trivy Image Report Artifact
+      - name: Upload Trivy Image Report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: trivy-image-report
           path: trivy-image-report.json
